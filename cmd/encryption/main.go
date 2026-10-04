@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+
+	"go.bryk.io/pkg/crypto/shamir"
 )
 
 func main() {
@@ -20,6 +22,18 @@ func main() {
 	fmt.Printf("Key: %s\nCiphertext: %s\n",
 		hex.EncodeToString(payload.Key),
 		hex.EncodeToString(payload.Ciphertext))
+
+	shares, err := shamir.Split(payload.Key, 7, 4)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	key, err := shamir.Combine([][]byte{shares[0], shares[2], shares[3], shares[4]})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	payload.Key = key
 
 	plaintext, err := c.Decrypt(payload)
 	if err != nil {
