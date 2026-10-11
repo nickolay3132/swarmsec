@@ -1,0 +1,8 @@
+github.com/coregx/ahocorasick v0.3.1 h1:1kG0szrBH+HBUaG6bRm2TWdJ+x6yJivmBsv6dfzk7ss=
+github.com/coregx/ahocorasick v0.3.1/go.mod h1:SDcS9KTiwLP8FHNpYSO3Q3mRqrK8SYJAYpygrhcIils=
+github.com/coregx/coregex v0.12.25 h1:iGRlkmFjEZIFheXvNdaFgfB8PcCEzsTNFcFhyhggXtA=
+github.com/coregx/coregex v0.12.25/go.mod h1:NoNLGw2x6oaJzZwNYzMgyWDkRpQHLbG3K31P2bFMQkA=
+go.bryk.io/pkg v0.0.0-20260923023723-3bbfdfe393db h1:T/edzxXXz8eRUG3Eb4yTwv+m1M/DV0VIl40piHPMtYU=
+go.bryk.io/pkg v0.0.0-20260923023723-3bbfdfe393db/go.mod h1:6QjyfPXV0+B/pVPu9JCxJlWuxV17gvNLboGIlMd46oo=
+golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
+golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
