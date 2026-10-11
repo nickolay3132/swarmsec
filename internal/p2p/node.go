@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"time"
 
@@ -24,16 +23,13 @@ type Config struct {
 	Bootstrap   []string
 
 	Namespace string
-	Protocol  protocol.ID
 
 	AdvertiseInterval time.Duration
 	DiscoveryTimeout  time.Duration
 	ConnectTimeout    time.Duration
-
-	OnMessage func(peer.ID, []byte)
 }
 
-type PeerConnectedHandler func(peer.ID, multiaddr.Multiaddr)
+type StreamHandler func(network.Stream)
 
 type Node struct {
 	host      host.Host
@@ -41,21 +37,17 @@ type Node struct {
 	discovery *drouting.RoutingDiscovery
 
 	namespace string
-	protocol  protocol.ID
 	config    Config
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu             sync.RWMutex
-	connectedHooks []PeerConnectedHandler
-	onMessage      func(peer.ID, []byte)
+	protocolMu       sync.RWMutex
+	protocolHandlers map[protocol.ID]StreamHandler
 
 	findMu     sync.Mutex
 	lastResult map[peer.ID]struct{}
-
-	notifyBundle *network.NotifyBundle
 
 	closeOnce sync.Once
 	closeErr  error
@@ -65,14 +57,12 @@ func NewNode(parent context.Context, cfg Config) (*Node, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
+
 	if len(cfg.ListenAddrs) == 0 {
 		cfg.ListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 	}
 	if cfg.Namespace == "" {
 		cfg.Namespace = "swarmsec-storage"
-	}
-	if cfg.Protocol == "" {
-		cfg.Protocol = protocol.ID("/swarmsec/1.0.0")
 	}
 	if cfg.AdvertiseInterval <= 0 {
 		cfg.AdvertiseInterval = 20 * time.Minute
@@ -95,42 +85,25 @@ func NewNode(parent context.Context, cfg Config) (*Node, error) {
 	}
 
 	n := &Node{
-		host:       h,
-		namespace:  cfg.Namespace,
-		protocol:   cfg.Protocol,
-		config:     cfg,
-		ctx:        ctx,
-		cancel:     cancel,
-		onMessage:  cfg.OnMessage,
-		lastResult: make(map[peer.ID]struct{}),
+		host:             h,
+		namespace:        cfg.Namespace,
+		config:           cfg,
+		ctx:              ctx,
+		cancel:           cancel,
+		protocolHandlers: make(map[protocol.ID]StreamHandler),
+		lastResult:       make(map[peer.ID]struct{}),
 	}
 
 	fail := func(err error) (*Node, error) {
 		cancel()
+
 		if n.dht != nil {
 			_ = n.dht.Close()
 		}
+
 		_ = h.Close()
 		return nil, err
 	}
-
-	h.SetStreamHandler(n.protocol, n.handleStream)
-
-	n.notifyBundle = &network.NotifyBundle{
-		ConnectedF: func(_ network.Network, conn network.Conn) {
-			n.mu.RLock()
-			hooks := append(
-				[]PeerConnectedHandler(nil),
-				n.connectedHooks...,
-			)
-			n.mu.RUnlock()
-
-			for _, hook := range hooks {
-				hook(conn.RemotePeer(), conn.RemoteMultiaddr())
-			}
-		},
-	}
-	h.Network().Notify(n.notifyBundle)
 
 	kdht, err := dht.New(
 		h,
@@ -140,6 +113,7 @@ func NewNode(parent context.Context, cfg Config) (*Node, error) {
 	if err != nil {
 		return fail(fmt.Errorf("create DHT: %w", err))
 	}
+
 	n.dht = kdht
 	n.discovery = drouting.NewRoutingDiscovery(kdht)
 
@@ -159,14 +133,18 @@ func NewNode(parent context.Context, cfg Config) (*Node, error) {
 		}
 
 		connectCtx, connectCancel := context.WithTimeout(
-			ctx, cfg.ConnectTimeout,
+			ctx,
+			cfg.ConnectTimeout,
 		)
+
 		err = h.Connect(connectCtx, *info)
 		connectCancel()
 
 		if err != nil {
 			return fail(fmt.Errorf(
-				"connect bootstrap %s: %w", info.ID, err,
+				"connect bootstrap %s: %w",
+				info.ID,
+				err,
 			))
 		}
 	}
@@ -183,64 +161,109 @@ func NewNode(parent context.Context, cfg Config) (*Node, error) {
 	return n, nil
 }
 
-func (n *Node) ID() peer.ID {
-	return n.host.ID()
+func (n *Node) Host() host.Host {
+	return n.host
 }
 
-func (n *Node) Addrs() []multiaddr.Multiaddr {
-	return n.host.Addrs()
-}
-
-func (n *Node) Multiaddrs() []string {
-	addrs := n.host.Addrs()
-	result := make([]string, 0, len(addrs))
-
-	for _, addr := range addrs {
-		result = append(result,
-			fmt.Sprintf("%s/p2p/%s", addr, n.ID()))
+func (n *Node) RegisterProtocol(id protocol.ID, handler StreamHandler) error {
+	if id == "" {
+		return errors.New("protocol ID cannot be empty")
+	}
+	if handler == nil {
+		return errors.New("stream handler cannot be nil")
 	}
 
-	return result
-}
+	n.protocolMu.Lock()
+	defer n.protocolMu.Unlock()
 
-func (n *Node) OnPeerConnected(h PeerConnectedHandler) {
-	if h == nil {
-		return
+	if n.ctx.Err() != nil {
+		return errors.New("node is closed")
 	}
 
-	n.mu.Lock()
-	n.connectedHooks = append(n.connectedHooks, h)
-	n.mu.Unlock()
+	if _, exists := n.protocolHandlers[id]; exists {
+		return fmt.Errorf("protocol %q is already registered", id)
+	}
+
+	n.protocolHandlers[id] = handler
+
+	n.host.SetStreamHandler(id, func(stream network.Stream) {
+		defer stream.Close()
+
+		handler(stream)
+	})
+
+	return nil
 }
 
-func (n *Node) SetOnMessage(h func(peer.ID, []byte)) {
-	n.mu.Lock()
-	n.onMessage = h
-	n.mu.Unlock()
+func (n *Node) UnregisterProtocol(id protocol.ID) {
+	n.protocolMu.Lock()
+	defer n.protocolMu.Unlock()
+
+	delete(n.protocolHandlers, id)
+	n.host.RemoveStreamHandler(id)
 }
 
-// FindPeers returns up to count unique peers that were successfully
-// connected to during this call.
-//
-// Peers returned by the immediately preceding successful search are
-// skipped when possible. Older results may appear again.
-func (n *Node) FindPeers(
-	ctx context.Context,
-	count int,
-) ([]peer.AddrInfo, error) {
+func (n *Node) OpenStream(ctx context.Context, id peer.ID, proto protocol.ID) (network.Stream, error) {
+	if id == n.ID() {
+		return nil, errors.New("cannot open stream to self")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if n.ctx.Err() != nil {
+		return nil, errors.New("node is closed")
+	}
+
+	stream, err := n.host.NewStream(ctx, id, proto)
+	if err != nil {
+		return nil, fmt.Errorf("open stream to %s using %s: %w", id, proto, err)
+	}
+
+	return stream, nil
+}
+
+func (n *Node) Connect(ctx context.Context, p peer.AddrInfo) error {
+	if p.ID == n.ID() {
+		return errors.New("cannot connect to self")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if n.ctx.Err() != nil {
+		return errors.New("node is closed")
+	}
+
+	connectCtx, cancel := context.WithTimeout(
+		ctx,
+		n.config.ConnectTimeout,
+	)
+	defer cancel()
+
+	if err := n.host.Connect(connectCtx, p); err != nil {
+		return fmt.Errorf("connect to %s: %w", p.ID, err)
+	}
+
+	return nil
+}
+
+func (n *Node) FindPeers(ctx context.Context, count int) ([]peer.AddrInfo, error) {
 	if count <= 0 {
 		return nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if n.ctx.Err() != nil {
+		return nil, errors.New("node is closed")
+	}
 
-	// Ensures two concurrent calls cannot use the same previous result.
 	n.findMu.Lock()
 	defer n.findMu.Unlock()
 
 	findCtx, cancel := context.WithTimeout(
-		ctx, n.config.DiscoveryTimeout,
+		ctx,
+		n.config.DiscoveryTimeout,
 	)
 	defer cancel()
 
@@ -258,10 +281,10 @@ func (n *Node) FindPeers(
 		case <-findCtx.Done():
 			n.lastResult = current
 
-			// Return partial results if we found any peers.
 			if len(result) > 0 {
 				return result, nil
 			}
+
 			return nil, findCtx.Err()
 
 		case p, ok := <-ch:
@@ -279,16 +302,18 @@ func (n *Node) FindPeers(
 			if _, exists := attempted[p.ID]; exists {
 				continue
 			}
+
 			attempted[p.ID] = struct{}{}
 
-			// Prefer different peers from the previous result.
 			if _, exists := n.lastResult[p.ID]; exists {
 				continue
 			}
 
 			connectCtx, connectCancel := context.WithTimeout(
-				findCtx, n.config.ConnectTimeout,
+				findCtx,
+				n.config.ConnectTimeout,
 			)
+
 			err := n.host.Connect(connectCtx, p)
 			connectCancel()
 
@@ -305,87 +330,8 @@ func (n *Node) FindPeers(
 	return result, nil
 }
 
-func (n *Node) Connect(
-	ctx context.Context,
-	p peer.AddrInfo,
-) error {
-	if p.ID == n.ID() {
-		return errors.New("cannot connect to self")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	connectCtx, cancel := context.WithTimeout(
-		ctx, n.config.ConnectTimeout,
-	)
-	defer cancel()
-
-	if err := n.host.Connect(connectCtx, p); err != nil {
-		return fmt.Errorf("connect to %s: %w", p.ID, err)
-	}
-	return nil
-}
-
-func (n *Node) Send(
-	ctx context.Context,
-	id peer.ID,
-	data []byte,
-) error {
-	if id == n.ID() {
-		return errors.New("cannot send to self")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	stream, err := n.host.NewStream(ctx, id, n.protocol)
-	if err != nil {
-		return fmt.Errorf("open stream to %s: %w", id, err)
-	}
-	defer stream.Close()
-
-	if _, err := stream.Write(data); err != nil {
-		_ = stream.Reset()
-		return fmt.Errorf("write to %s: %w", id, err)
-	}
-
-	if err := stream.CloseWrite(); err != nil {
-		return fmt.Errorf("close write to %s: %w", id, err)
-	}
-	return nil
-}
-
-func (n *Node) handleStream(stream network.Stream) {
-	defer stream.Close()
-
-	const maxMessageSize = 1 << 20 // 1 MiB
-
-	data, err := io.ReadAll(
-		io.LimitReader(stream, maxMessageSize+1),
-	)
-	if err != nil {
-		_ = stream.Reset()
-		return
-	}
-	if len(data) > maxMessageSize {
-		_ = stream.Reset()
-		return
-	}
-
-	n.mu.RLock()
-	handler := n.onMessage
-	n.mu.RUnlock()
-
-	if handler != nil {
-		handler(stream.Conn().RemotePeer(), data)
-	}
-}
-
 func (n *Node) advertise() {
-	dutil.Advertise(
-		n.ctx, n.discovery, n.namespace,
-	)
+	dutil.Advertise(n.ctx, n.discovery, n.namespace)
 }
 
 func (n *Node) advertiseLoop() {
@@ -398,6 +344,7 @@ func (n *Node) advertiseLoop() {
 		select {
 		case <-n.ctx.Done():
 			return
+
 		case <-ticker.C:
 			n.advertise()
 		}
@@ -407,10 +354,13 @@ func (n *Node) advertiseLoop() {
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		n.cancel()
-		n.host.Network().StopNotify(n.notifyBundle)
 		n.wg.Wait()
 
-		dhtErr := n.dht.Close()
+		var dhtErr error
+		if n.dht != nil {
+			dhtErr = n.dht.Close()
+		}
+
 		hostErr := n.host.Close()
 		n.closeErr = errors.Join(dhtErr, hostErr)
 	})

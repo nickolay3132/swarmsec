@@ -1,17 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/multiformats/go-multiaddr"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/nickolay3132/swarmsec/internal/p2p"
 )
 
@@ -37,9 +38,6 @@ func main() {
 		Namespace:        "swarmsec-storage",
 		DiscoveryTimeout: 15 * time.Second,
 		ConnectTimeout:   5 * time.Second,
-		OnMessage: func(from peer.ID, data []byte) {
-			fmt.Printf("\n[Message] From %s: %s\n", from, data)
-		},
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -54,58 +52,71 @@ func main() {
 		fmt.Println(" ", addr)
 	}
 
-	node.OnPeerConnected(func(
-		id peer.ID,
-		addr multiaddr.Multiaddr,
-	) {
-		fmt.Printf("\n[Connected] Peer: %s, address: %s\n", id, addr)
+	node.RegisterProtocol("/swarmsec/put/1.0.0", func(stream network.Stream) {
+		defer stream.Close()
+
+		data, err := io.ReadAll(stream)
+		if err != nil {
+			log.Printf("Read put stream: %v", err)
+			return
+		}
+
+		log.Printf("Got put stream: %s", string(data))
 	})
-
-	peers, err := node.FindPeers(ctx, 3)
-	if err != nil {
-		if ctx.Err() == nil {
-			log.Println("Find peers:", err)
-		}
-	} else {
-		for _, p := range peers {
-			fmt.Printf("[Discovered] %s | addresses: %v\n", p.ID, p.Addrs)
-
-			if err := node.Send(ctx, p.ID, []byte("hello")); err != nil {
-				log.Printf("Send to %s: %v\n", p.ID, err)
-			}
-		}
-	}
 
 	fmt.Println("\nNode is running. Press Ctrl+C to stop.")
 
+	input := make(chan string)
+
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		defer close(input)
+
+		for scanner.Scan() {
+			input <- scanner.Text()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("\nNode is shutting down")
+			return
+
+		case line, ok := <-input:
+			if !ok {
+				return
+			}
+
+			switch line {
+			case "message":
+				fmt.Println("Sending message")
+				peers, err := node.FindPeers(ctx, 3)
+				if err != nil {
+					if ctx.Err() == nil {
+						log.Println("Find peers:", err)
+					}
+				} else {
+					for _, p := range peers {
+						fmt.Printf("[Discovered] %s | addresses: %v\n", p.ID, p.Addrs)
+
+						stream, err := node.OpenStream(ctx, p.ID, "/swarmsec/put/1.0.0")
+						if err != nil {
+							log.Println("Open stream:", err)
+							continue
+						}
+
+						stream.Write([]byte("hello"))
+
+						stream.CloseWrite()
+						stream.Close()
+					}
+				}
+			}
+		}
+	}
 	<-ctx.Done()
 
 	fmt.Println("\nShutting down node...")
-	//// 6. Ждём Enter и ищем 2 пиров
-	//reader := bufio.NewReader(os.Stdin)
-	//for {
-	//	fmt.Println("\n--- Press Enter to find 2 peers in namespace ---")
-	//	_, _ = reader.ReadString('\n')
-	//
-	//	peerChan, err := routingDiscovery.FindPeers(ctx, namespace)
-	//	if err != nil {
-	//		fmt.Println("find peers:", err)
-	//		continue
-	//	}
-	//
-	//	count := 0
-	//	for p := range peerChan {
-	//		//if p.ID == h.ID() {
-	//		//	continue // пропускаем себя
-	//		//}
-	//		fmt.Printf("Found peer [%d]: %s | addrs: %v\n", count+1, p.ID.String(), p.Addrs)
-	//		//count++
-	//		//if count >= 2 {
-	//		//	break
-	//		//}
-	//	}
-	//	if count == 0 {
-	//		fmt.Println("No peers found (routing table may still be filling)")
-	//	}
-	//}
+
 }
