@@ -165,6 +165,26 @@ func (n *Node) Host() host.Host {
 	return n.host
 }
 
+func (n *Node) ID() peer.ID {
+	return n.host.ID()
+}
+
+func (n *Node) Addrs() []multiaddr.Multiaddr {
+	return n.host.Addrs()
+}
+
+func (n *Node) Multiaddrs() []string {
+	addrs := n.host.Addrs()
+	result := make([]string, 0, len(addrs))
+
+	for _, addr := range addrs {
+		result = append(result,
+			fmt.Sprintf("%s/p2p/%s", addr, n.ID()))
+	}
+
+	return result
+}
+
 func (n *Node) RegisterProtocol(id protocol.ID, handler StreamHandler) error {
 	if id == "" {
 		return errors.New("protocol ID cannot be empty")
@@ -280,17 +300,12 @@ func (n *Node) FindPeers(ctx context.Context, count int) ([]peer.AddrInfo, error
 		select {
 		case <-findCtx.Done():
 			n.lastResult = current
-
-			if len(result) > 0 {
-				return result, nil
-			}
-
-			return nil, findCtx.Err()
+			return nil, fmt.Errorf("could not find enough peers (found %d/%d): %w", len(result), count, findCtx.Err())
 
 		case p, ok := <-ch:
 			if !ok {
 				n.lastResult = current
-				return result, nil
+				return nil, fmt.Errorf("peer discovery channel closed prematurely (found %d/%d)", len(result), count)
 			}
 
 			if p.ID == "" || p.ID == n.ID() {
@@ -309,15 +324,7 @@ func (n *Node) FindPeers(ctx context.Context, count int) ([]peer.AddrInfo, error
 				continue
 			}
 
-			connectCtx, connectCancel := context.WithTimeout(
-				findCtx,
-				n.config.ConnectTimeout,
-			)
-
-			err := n.host.Connect(connectCtx, p)
-			connectCancel()
-
-			if err != nil {
+			if err := n.Connect(ctx, p); err != nil {
 				continue
 			}
 

@@ -12,7 +12,7 @@ type StoreUC struct {
 	repo    repository
 }
 
-func (uc *StoreUC) execute(ctx context.Context, secret string, secretName string) error {
+func (uc *StoreUC) Execute(ctx context.Context, secret string, secretName string) error {
 	payload, err := uc.cipher.Encrypt([]byte(secret))
 	if err != nil {
 		return fmt.Errorf("could not encrypt secret: %w", err)
@@ -23,12 +23,12 @@ func (uc *StoreUC) execute(ctx context.Context, secret string, secretName string
 		return fmt.Errorf("could not split secret: %w", err)
 	}
 
-	peerIds, err := uc.network.Put(ctx, secretName, payload.Ciphertext, shares)
+	peerInfos, err := uc.network.Put(ctx, secretName, payload.Ciphertext, shares)
 	if err != nil {
 		return fmt.Errorf("could not put secret: %w", err)
 	}
 
-	err = uc.repo.SaveShardOwners(ctx, secretName, peerIds)
+	err = uc.repo.SaveShardOwners(ctx, secretName, peerInfos)
 	if err != nil {
 		return fmt.Errorf("could not save secret: %w", err)
 	}

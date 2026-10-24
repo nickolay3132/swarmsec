@@ -19,11 +19,11 @@ type sharer interface {
 }
 
 type network interface {
-	Put(ctx context.Context, name string, cipherText []byte, shares [][]byte) ([]peer.ID, error)
-	Get(ctx context.Context, name string, peers []peer.ID, minShares int) (*p2p.Secret, error)
+	Put(ctx context.Context, name string, cipherText []byte, shares [][]byte) ([]peer.AddrInfo, error)
+	Get(ctx context.Context, name string, peers []peer.AddrInfo, minShares int) (*p2p.Secret, error)
 }
 
 type repository interface {
-	SaveShardOwners(ctx context.Context, name string, owners []peer.ID) error
-	GetShardOwners(ctx context.Context, name string) ([]peer.ID, error)
+	SaveShardOwners(ctx context.Context, name string, owners []peer.AddrInfo) error
+	GetShardOwners(ctx context.Context, name string) ([]peer.AddrInfo, error)
 }
