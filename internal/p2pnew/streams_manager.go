@@ -11,21 +11,25 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
-type streamsManager struct {
+type StreamsManager struct {
 	host host.Host
 
 	mu             sync.RWMutex
 	streamHandlers map[protocol.ID]network.StreamHandler
 }
 
-func newStreamsManager(host host.Host) *streamsManager {
-	return &streamsManager{
+func NewStreamsManager(host host.Host) *StreamsManager {
+	return &StreamsManager{
 		host:           host,
 		streamHandlers: make(map[protocol.ID]network.StreamHandler),
 	}
 }
 
-func (s *streamsManager) SetStreamHandler(pid protocol.ID, handler network.StreamHandler) error {
+func (s *StreamsManager) SelfID() peer.ID {
+	return s.host.ID()
+}
+
+func (s *StreamsManager) SetStreamHandler(pid protocol.ID, handler network.StreamHandler) error {
 	if pid == protocol.ID("") {
 		return fmt.Errorf("invalid stream handler protocol id")
 	}
@@ -46,7 +50,7 @@ func (s *streamsManager) SetStreamHandler(pid protocol.ID, handler network.Strea
 	return nil
 }
 
-func (s *streamsManager) RemoveStreamHandler(pid protocol.ID) {
+func (s *StreamsManager) RemoveStreamHandler(pid protocol.ID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -54,7 +58,7 @@ func (s *streamsManager) RemoveStreamHandler(pid protocol.ID) {
 	s.host.RemoveStreamHandler(pid)
 }
 
-func (s *streamsManager) OpenStream(ctx context.Context, ai peer.AddrInfo, pid protocol.ID) (network.Stream, error) {
+func (s *StreamsManager) OpenStream(ctx context.Context, ai peer.AddrInfo, pid protocol.ID) (network.Stream, error) {
 	if ai.ID == s.host.ID() {
 		return nil, fmt.Errorf("cannot open stream to self")
 	}

@@ -12,6 +12,15 @@ type StoreUC struct {
 	repo    repository
 }
 
+func NewStoreUC(cipher cipher, sharer sharer, network network, repo repository) *StoreUC {
+	return &StoreUC{
+		cipher:  cipher,
+		sharer:  sharer,
+		network: network,
+		repo:    repo,
+	}
+}
+
 func (uc *StoreUC) Execute(ctx context.Context, secret string, secretName string) error {
 	payload, err := uc.cipher.Encrypt([]byte(secret))
 	if err != nil {

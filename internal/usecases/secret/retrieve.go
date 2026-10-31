@@ -14,6 +14,15 @@ type RetrieveUC struct {
 	sharer  sharer
 }
 
+func NewRetrieveUC(repo repository, network network, cipher cipher, sharer sharer) *RetrieveUC {
+	return &RetrieveUC{
+		repo:    repo,
+		network: network,
+		cipher:  cipher,
+		sharer:  sharer,
+	}
+}
+
 func (uc *RetrieveUC) Execute(ctx context.Context, secretName string) ([]byte, error) {
 	owners, err := uc.repo.GetShardOwners(ctx, secretName)
 	if err != nil {

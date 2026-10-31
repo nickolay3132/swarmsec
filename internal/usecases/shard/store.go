@@ -23,7 +23,7 @@ func (uc *StoreUC) Execute(ctx context.Context, putString string) error {
 		return errors.New("shard: empty put string")
 	}
 
-	secretName, cipherText, shard, err := uc.codec.ParsePutString(ctx, putString)
+	secretName, cipherText, shard, err := uc.codec.Parse(putString)
 	if err != nil {
 		return fmt.Errorf("shard: parse put string: %w", err)
 	}

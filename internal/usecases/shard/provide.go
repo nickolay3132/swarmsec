@@ -25,7 +25,7 @@ func (uc *ProvideUC) Execute(ctx context.Context, secretName string) (string, er
 		return "", fmt.Errorf("provide shard: get shard %q: %w", secretName, err)
 	}
 
-	provideString := uc.codec.FormatProvideString(secretName, cipherText, shard)
+	provideString := uc.codec.Format(secretName, cipherText, shard)
 
 	return provideString, nil
 }

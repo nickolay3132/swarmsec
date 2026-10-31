@@ -8,6 +8,6 @@ type repo interface {
 }
 
 type codec interface {
-	ParsePutString(ctx context.Context, putString string) (secretName string, cipherText, shard []byte, err error)
-	FormatProvideString(secretName string, cipherText, shard []byte) string
+	Parse(str string) (secretName string, cipherText, shard []byte, err error)
+	Format(secretName string, cipherText, shard []byte) string
 }

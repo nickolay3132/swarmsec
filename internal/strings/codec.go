@@ -1,44 +1,66 @@
 package strings
 
 import (
-	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
 
 type Codec struct{}
 
-func (c *Codec) ParsePutString(ctx context.Context, putString string) (secretName string, cipherText, shard []byte, err error) {
-	open := strings.IndexByte(putString, '[')
-	cloze := strings.IndexByte(putString, ']')
-	if open != 0 || cloze == 1 || open > cloze {
-		return "", nil, nil, fmt.Errorf("invalid put string format")
-	}
-
-	method := putString[open+1 : cloze]
-	if strings.ToLower(method) != "put" {
-		return "", nil, nil, fmt.Errorf("invalid put string method")
-	}
-
-	rest := putString[cloze+1:]
-	if rest == "" {
-		return "", nil, nil, fmt.Errorf("invalid put string rest")
-	}
-	args := strings.Split(rest, "&")
-
-	cipherText, err = hex.DecodeString(args[1])
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("invalid put string cipherText: %v", err)
-	}
-
-	shard, err = hex.DecodeString(args[2])
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("invalid put string shard: %v", err)
-	}
-
-	return args[0], cipherText, shard, nil
+func NewCodec() *Codec {
+	return &Codec{}
 }
-func (c *Codec) FormatProvideString(secretName string, cipherText, shard []byte) string {
-	return fmt.Sprintf("[PROVIDE]%s&%s&%s", secretName, hex.EncodeToString(cipherText), hex.EncodeToString(shard))
+
+func (c *Codec) Parse(str string) (secretName string, cipherText, shard []byte, err error) {
+	if len(str) < 3 {
+		return "", nil, nil, errors.New("input string too short")
+	}
+
+	openBracket := strings.IndexByte(str, '[')
+	closeBracket := strings.IndexByte(str, ']')
+	if openBracket == -1 || closeBracket == -1 || openBracket > closeBracket {
+		return "", nil, nil, errors.New("invalid string format")
+	}
+
+	secretName = str[openBracket+1 : closeBracket]
+	if secretName == "" {
+		return "", nil, nil, errors.New("empty secret name")
+	}
+
+	rest := str[closeBracket+1:]
+	parts := strings.Split(rest, "&")
+	if len(parts) != 2 {
+		return "", nil, nil, fmt.Errorf("expected exactly 2 parts separated by '&', got %d", len(parts))
+	}
+
+	cipherHex := parts[0]
+	shardHex := parts[1]
+
+	if cipherHex == "" {
+		return "", nil, nil, errors.New("empty ciphertext hex")
+	}
+	if shardHex == "" {
+		return "", nil, nil, errors.New("empty shard hex")
+	}
+
+	cipherText, err = hex.DecodeString(cipherHex)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("invalid ciphertext hex: %w", err)
+	}
+
+	shard, err = hex.DecodeString(shardHex)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("invalid shard hex: %w", err)
+	}
+
+	return secretName, cipherText, shard, nil
+}
+
+func (c *Codec) Format(secretName string, cipherText, shard []byte) string {
+	return fmt.Sprintf("[%s]%s&%s",
+		secretName,
+		hex.EncodeToString(cipherText),
+		hex.EncodeToString(shard))
 }

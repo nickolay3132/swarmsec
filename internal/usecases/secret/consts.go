@@ -1,6 +1,6 @@
 package secret
 
 const (
-	totalShards = 7
-	quorum      = 4
+	totalShards = 3
+	quorum      = 2
 )
