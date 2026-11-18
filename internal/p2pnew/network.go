@@ -2,6 +2,7 @@ package p2pnew
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"slices"
@@ -14,11 +15,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/multiformats/go-multiaddr"
+
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 )
 
 type Config struct {
 	ListenAddrs        []string
 	BootstrapAddrs     []string
+	PrivateKey         ed25519.PrivateKey
 	DhtProtocolPrefix  string
 	AdvertiseNamespace string
 
@@ -39,9 +43,22 @@ type Network struct {
 
 func Init(ctx context.Context, cfg Config) (*Network, error) {
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(cfg.ListenAddrs...))
+	opts := []libp2p.Option{
+		libp2p.ListenAddrStrings(cfg.ListenAddrs...),
+	}
+
+	if cfg.PrivateKey != nil {
+		libp2pPriv, err := libp2pcrypto.UnmarshalEd25519PrivateKey(cfg.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+
+		opts = append(opts, libp2p.Identity(libp2pPriv))
+	}
+
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, err
 	}
